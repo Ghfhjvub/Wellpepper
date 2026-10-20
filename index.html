@@ -686,9 +686,21 @@
         document.getElementById('cancelPasswordBtn').addEventListener('click', () => passwordModal.classList.add('hidden'));
         document.getElementById('closeAdminBtn').addEventListener('click', () => adminModal.classList.add('hidden'));
 
-        document.getElementById('submitPasswordBtn').addEventListener('click', () => {
+        // كلمة المرور لا تظهر هنا: نخزّن بصمتها فقط (PBKDF2-SHA256) ونقارنها بعد تشفير ما يكتبه المستخدم
+        const ADMIN_SALT = '7a-gaming-admin-v1';
+        const ADMIN_HASH = '92a67a45dfde294148aa99c51b60463ebb4119f28b73abba4177f5708d86b32a';
+        async function hashPass(p) {
+            const enc = new TextEncoder();
+            const key = await crypto.subtle.importKey('raw', enc.encode(p), 'PBKDF2', false, ['deriveBits']);
+            const bits = await crypto.subtle.deriveBits({ name: 'PBKDF2', salt: enc.encode(ADMIN_SALT), iterations: 200000, hash: 'SHA-256' }, key, 256);
+            return Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('');
+        }
+
+        document.getElementById('submitPasswordBtn').addEventListener('click', async () => {
             const pass = document.getElementById('adminPasswordInput').value;
-            if(pass === '7ASSON') {
+            let ok = false;
+            try { ok = (await hashPass(pass)) === ADMIN_HASH; } catch (e) { alert('المتصفح لا يدعم التشفير، افتح الموقع عبر https.'); return; }
+            if(ok) {
                 passwordModal.classList.add('hidden');
                 document.getElementById('adminPasswordInput').value = '';
                 adminModal.classList.remove('hidden');
