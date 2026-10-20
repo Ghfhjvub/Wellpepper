@@ -58,6 +58,10 @@
         html.dark select option{background:#1b1233;color:#f4f0ff}
         html .overlay{background:rgba(24,12,52,.45);-webkit-backdrop-filter:blur(8px);backdrop-filter:blur(8px)}
         html .glass-strong{background:var(--glass-strong);-webkit-backdrop-filter:blur(24px) saturate(1.6);backdrop-filter:blur(24px) saturate(1.6);border-color:var(--glass-line);border-radius:1.25rem;box-shadow:0 30px 80px -30px rgba(76,29,149,.5)}
+        html .wall-like-btn{transition:transform .15s,color .15s}
+        html .wall-like-btn:hover{color:#ef4444}
+        html .wall-like-btn:active{transform:scale(1.2)}
+        html .wall-like-btn.is-liked{color:#ef4444}
         html .pill{background:rgba(124,58,237,.1);color:var(--accent-2);border:1px solid rgba(124,58,237,.25)}
         html .badge{background:linear-gradient(135deg,#8b5cf6,#6d28d9);color:#fff}
         /* purple buttons, white text, luxurious hover */
@@ -256,7 +260,11 @@
                 <button id="closeWallPreview" class="ui-muted hover-ink text-xl cursor-pointer" aria-label="close"><i class="fa-solid fa-xmark"></i></button>
             </div>
             <div class="flex-grow overflow-auto p-3 flex justify-center"><img id="wallPreviewImg" alt="" class="max-w-full max-h-[68vh] w-auto h-auto rounded-xl border ui-line"></div>
-            <div class="p-3 border-t ui-line">
+            <div class="p-3 border-t ui-line space-y-3">
+                <div class="flex items-center justify-between gap-2">
+                    <button type="button" id="wallPreviewLike" class="wall-like wall-like-btn flex items-center gap-2 text-base font-bold cursor-pointer ui-muted" aria-label="like"><i class="fa-heart"></i><span class="wall-like-count"></span></button>
+                    <span class="flex items-center gap-2 text-sm font-bold ui-muted"><i class="fa-solid fa-download"></i><span class="wall-dl-count"></span></span>
+                </div>
                 <button id="wallPreviewDl" type="button" class="btn-primary w-full py-2.5 rounded-xl font-bold flex items-center justify-center gap-2 text-sm cursor-pointer"><i class="fa-solid fa-download"></i><span data-translate="downloadBtn">Download</span></button>
             </div>
         </div>
@@ -1396,18 +1404,69 @@
                     <div class="face face-front">
                         <button type="button" class="cover-wrap block w-full cursor-zoom-in" style="aspect-ratio:${w.kind === 'pc' ? '16/10' : '9/16'}" aria-label="${t}"><img src="${escapeHtml(w.thumb)}" alt="${t}" class="game-cover" loading="lazy"></button>
                         <h3 class="game-title text-sm sm:text-base font-bold ui-ink" style="min-height:0">${t}</h3>
+                        <div class="flex items-center justify-between gap-2">
+                            <button type="button" class="wall-like wall-like-btn flex items-center gap-1.5 text-sm font-bold cursor-pointer ui-muted" aria-label="like"><i class="fa-heart"></i><span class="wall-like-count"></span></button>
+                            <span class="wall-dl-stat flex items-center gap-1.5 text-xs font-bold ui-muted" title="${tr.downloadsCount} ${tr.personUnit}"><i class="fa-solid fa-download"></i><span class="wall-dl-count"></span></span>
+                        </div>
                         <button type="button" class="wall-dl btn-primary w-full py-2.5 rounded-xl font-bold flex items-center justify-center gap-1.5 text-xs sm:text-sm cursor-pointer"><i class="fa-solid fa-download"></i> ${tr.downloadBtn}</button>
                     </div>`;
                 card.querySelector('.cover-wrap').addEventListener('click', () => openWallPreview(w));
                 card.querySelector('.wall-dl').addEventListener('click', (e) => downloadWall(w, e.currentTarget));
+                card.querySelector('.wall-like').addEventListener('click', () => toggleWallLike(w));
+                card.dataset.wid = w.id;
                 c.appendChild(card);
+                paintWallStats(w);
             });
+        }
+
+        // ---- الإعجاب وعدّاد التنزيلات ----
+        // wallpapers/{id}: likesCount + downloadsCount (يُحدَّثان بـ increment). ما أعجب به الجهاز وما نزّله يُحفظ محلياً حتى لا يُحتسب مرتين.
+        const wallStore = {
+            get(k) { try { return JSON.parse(localStorage.getItem(k)) || []; } catch { return []; } },
+            set(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+        };
+        const wallLiked = id => wallStore.get('wall_likes').includes(id);
+
+        function paintWallStats(w) {
+            const liked = wallLiked(w.id);
+            const likes = Math.max(0, w.likesCount || 0), dls = Math.max(0, w.downloadsCount || 0);
+            const scopes = [document.querySelector(`#wallContainer [data-wid="${w.id}"]`)];
+            if (wallPrev && wallPrev.id === w.id) scopes.push(document.getElementById('wallPreview'));
+            scopes.forEach(s => {
+                if (!s) return;
+                s.querySelectorAll('.wall-like').forEach(b => {
+                    b.classList.toggle('is-liked', liked);
+                    b.querySelector('i').className = (liked ? 'fa-solid' : 'fa-regular') + ' fa-heart';
+                });
+                s.querySelectorAll('.wall-like-count').forEach(el => el.textContent = likes);
+                s.querySelectorAll('.wall-dl-count').forEach(el => el.textContent = dls);
+            });
+        }
+        async function toggleWallLike(w) {
+            const list = wallStore.get('wall_likes');
+            const was = list.includes(w.id), delta = was ? -1 : 1;
+            wallStore.set('wall_likes', was ? list.filter(x => x !== w.id) : list.concat(w.id));
+            w.likesCount = Math.max(0, (w.likesCount || 0) + delta);
+            paintWallStats(w);
+            if (!w.persisted) return; // الخلفيات المضمّنة قبل أول دخول للمدير لا تملك مستنداً في Firestore بعد
+            try { await updateDoc(doc(db, 'wallpapers', w.id), { likesCount: increment(delta) }); }
+            catch (err) { console.error(err); }
+        }
+        async function countWallDownload(w) {
+            const done = wallStore.get('wall_dls');
+            if (done.includes(w.id)) return;
+            wallStore.set('wall_dls', done.concat(w.id));
+            w.downloadsCount = (w.downloadsCount || 0) + 1;
+            paintWallStats(w);
+            if (!w.persisted) return;
+            try { await updateDoc(doc(db, 'wallpapers', w.id), { downloadsCount: increment(1) }); }
+            catch (err) { console.error(err); }
         }
 
         async function loadWallpapers() {
             try {
                 const snap = await getDocs(query(collection(db, 'wallpapers'), orderBy('createdAt', 'desc')));
-                wallData = snap.docs.filter(d => d.id !== '_seed').map(d => ({ id: d.id, ...d.data() }));
+                wallData = snap.docs.filter(d => d.id !== '_seed').map(d => ({ id: d.id, persisted: true, ...d.data() }));
                 // قبل أول دخول للمدير تظهر الصور المضمّنة في الملف
                 if (!snap.docs.some(d => d.id === '_seed')) builtinWalls().forEach(b => { if (!wallData.some(w => w.id === b.id)) wallData.push(b); });
             } catch (err) {
@@ -1431,6 +1490,7 @@
                 a.href = await getWallFull(w);
                 a.download = (w.title || 'wallpaper').replace(/[\\/:*?"<>|]+/g, '').trim() + '.jpg';
                 document.body.appendChild(a); a.click(); a.remove();
+                countWallDownload(w);
             } catch (err) {
                 console.error(err);
                 alert('حدث خطأ أثناء التنزيل.');
@@ -1442,6 +1502,7 @@
             const img = document.getElementById('wallPreviewImg');
             img.src = w.full || w.thumb; img.alt = w.title;
             document.getElementById('wallPreview').classList.remove('hidden');
+            paintWallStats(w);
             try { const f = await getWallFull(w); if (wallPrev === w) img.src = f; } catch (e) {}
         }
         function closeWallPreview() {
@@ -1452,6 +1513,7 @@
         document.getElementById('closeWallPreview').addEventListener('click', closeWallPreview);
         document.getElementById('wallPreview').addEventListener('click', (e) => { if (e.target.id === 'wallPreview') closeWallPreview(); });
         document.getElementById('wallPreviewDl').addEventListener('click', (e) => { if (wallPrev) downloadWall(wallPrev, e.currentTarget); });
+        document.getElementById('wallPreviewLike').addEventListener('click', () => { if (wallPrev) toggleWallLike(wallPrev); });
         document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeWallPreview(); });
 
         // ---- لوحة المدير: رفع/نقل/حذف الخلفيات ----
